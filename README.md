@@ -1,22 +1,35 @@
 # Genomic Data Analysis in R
-## Differential Expression • PCA • Bioconductor • Statistical Foundations
 
-### This repository contains foundational and applied genomic data analysis workflows in R, focused on:
+Foundational genomic data analysis workflows in R, focused on RNA-seq differential expression, dimensionality reduction, and Bioconductor/statistical fundamentals.
 
--Differential expression analysis
+---
 
--Dimensionality reduction
+## Contents
 
--Bioconductor ecosystem tools
+### 📄 DESeq2 examples.R  
+RNA-seq differential expression workflow using **DESeq2** (design setup, normalization, DE testing, results extraction).
 
--Statistical reasoning for genomics
+### 📄 PCA.R  
+PCA workflow for expression data QC and sample-level structure (variance exploration, clustering, visualization).
 
--Reproducible R-based bioinformatics workflows
+### 📄 bioconductor_quiz2.R / bioconductor_quiz3.R / bioconductor_quiz4.R  
+Exercises exploring core **Bioconductor** data structures and interoperability (e.g., common container objects and annotation handling).
 
-It serves as both:
+### 📄 stat_quiz1.R / stat_quiz2.R / stat_quiz3.R / stat_quiz4.R  
+Statistical foundations used in genomics (distributions, hypothesis testing, multiple testing concepts, interpretation).
 
--A training foundation in genomic data science
+### 📄 package_related.R  
+Notes/utilities related to R package usage for genomic workflows.
 
--A reproducible template for RNA-seq and expression analysis
+---
 
--A portfolio demonstration of statistical competency in genomics
+## Requirements
+
+- R ≥ 4.2  
+- Bioconductor (DESeq2)
+
+Install DESeq2:
+
+```r
+if (!require("BiocManager")) install.packages("BiocManager")
+BiocManager::install("DESeq2")
