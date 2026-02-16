@@ -12,10 +12,10 @@ RNA-seq differential expression workflow using **DESeq2** (design setup, normali
 ### 📄 PCA.R  
 PCA workflow for expression data QC and sample-level structure (variance exploration, clustering, visualization).
 
-### 📄 bioconductor_quiz2.R / bioconductor_quiz3.R / bioconductor_quiz4.R  
+### 📄 bioconductor_*.R  
 Exercises exploring core **Bioconductor** data structures and interoperability (e.g., common container objects and annotation handling).
 
-### 📄 stat_quiz1.R / stat_quiz2.R / stat_quiz3.R / stat_quiz4.R  
+### 📄 stat_*.R  
 Statistical foundations used in genomics (distributions, hypothesis testing, multiple testing concepts, interpretation).
 
 ### 📄 package_related.R  
