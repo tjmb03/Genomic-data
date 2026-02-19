@@ -1,0 +1,316 @@
+---
+title: "Informed Batch Correction for scRNA-seq (10x) — Reproducible Integration Report"
+author: "Bo Ma"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+params:
+  tenx_h5:
+    - "data/batchA/pbmc3k_filtered_gene_bc_matrices.tar.gz"
+    - "data/batchB/pbmc6k_filtered_gene_bc_matrices.tar.gz"
+  batch_names:
+    - "PBMC_A"
+    - "PBMC_B"
+
+  # QC thresholds
+  min_genes: 300
+  max_genes: 6000
+  max_percent_mt: 20
+  # Preprocess
+  nfeatures: 3000
+  npcs: 30
+  # Benchmarking (metrics computed on subsample for speed)
+  max_cells_metrics: 20000
+  seed_metrics: 1
+  # Methods
+  run_seurat_integration: true
+  run_harmony: true
+  run_fastmnn: true
+  # fastMNN options
+  fastmnn_k: 20
+  # Save outputs
+  save_png: true
+  png_width: 14
+  png_height: 10
+  png_dpi: 150
+  out_prefix: "outputs/integration"
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# BUG FIX: source("R/...") resolves relative to getwd() at render time, which
+# may not be the project root.  Instead, anchor everything to the directory that
+# contains this Rmd file so the report is location-independent.
+.rmd_dir <- dirname(normalizePath(knitr::current_input(dir = TRUE)))
+knitr::opts_knit$set(root.dir = .rmd_dir)   # also anchors file I/O in later chunks
+
+.r <- function(script) source(file.path(.rmd_dir, "R", script))
+
+library(Seurat)
+library(Matrix)
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+
+.r("io_10x.R")
+.r("workflow.R")
+.r("integration.R")
+.r("diagnostics.R")
+.r("reporting_tables.R")
+```
+
+# Overview
+
+This report implements an **industry-grade, reproducible** workflow for **informed batch correction** on **10x scRNA-seq**:
+
+- Baseline: merged (no correction)
+- Correction methods:
+  - **Seurat anchors** integration
+  - **Harmony** (batch covariate regression in latent space)
+  - **fastMNN (batchelor)** (mutual nearest neighbors)
+- Diagnostics + benchmarking:
+  - **Batch mixing**: silhouette (lower is better) + variance explained by batch (lower is better)
+  - **Biology conservation**: cluster silhouette (higher is better) + variance explained by clusters (higher is better)
+- Publication-style figures (Figure 1–3) + decision table + saved artifacts
+
+# Inputs
+
+```{r inputs}
+stopifnot(length(params$tenx_h5) >= 1)
+
+paths <- params$tenx_h5
+# Accepted inputs: .h5 OR MTX folder OR .tar.gz/.tgz/.tar/.zip containing MTX trio
+batch_names <- params$batch_names
+
+if (length(batch_names) == 0) {
+  batch_names <- derive_batch_names(paths)
+} else {
+  stopifnot(length(batch_names) == length(paths))
+}
+
+data.frame(batch = batch_names, h5_path = paths)
+```
+
+# Load + per-batch QC + preprocessing
+
+```{r load_qc_preprocess}
+objs_raw  <- list()   # pre-QC objects (for QC visualisation)
+objs      <- list()   # post-QC, preprocessed objects
+
+for (i in seq_along(paths)) {
+  message("Loading: ", paths[i])
+  counts <- read_10x_input(paths[i])
+  obj_raw <- make_seurat_one_batch(counts, batch_names[i])   # percent.mt already added here
+  objs_raw[[batch_names[i]]] <- obj_raw
+
+  # BUG FIX: QC filtering and preprocessing were applied before storing 'objs',
+  # but the QC plots below (figure1) used these same filtered objects,
+  # making the QC plots show post-QC distributions (misleading/useless).
+  # Solution: keep raw objects separately for QC plots.
+  obj <- apply_qc(obj_raw, params$min_genes, params$max_genes, params$max_percent_mt)
+  obj <- preprocess_seurat(obj, params$nfeatures, params$npcs)
+  objs[[batch_names[i]]] <- obj
+}
+
+objs[[1]]
+```
+
+# Figure 1 — Data QC and baseline structure
+
+```{r figure1}
+# BUG FIX: use objs_raw (pre-QC) for QC plots so thresholds are meaningful.
+# percent.mt was already computed by make_seurat_one_batch(); no need to recompute.
+merged_for_qc <- merge(objs_raw[[1]], y = objs_raw[-1], add.cell.ids = names(objs_raw))
+
+p_qc1 <- VlnPlot(merged_for_qc, features = c("nFeature_RNA","nCount_RNA","percent.mt"), ncol = 3) +
+  plot_annotation(title = "Figure 1A. QC distributions (pre-filter)")
+
+p_qc2 <- FeatureScatter(merged_for_qc, feature1 = "nCount_RNA", feature2 = "percent.mt") +
+  FeatureScatter(merged_for_qc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
+  plot_annotation(title = "Figure 1B. QC relationships (pre-filter)")
+
+t0 <- Sys.time()
+merged <- merge(objs[[1]], y = objs[-1], add.cell.ids = names(objs))
+merged <- preprocess_seurat(merged, params$nfeatures, params$npcs)
+rt_merged <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+p_base1 <- DimPlot(merged, group.by = "batch") + ggtitle("Merged: batch")
+p_base2 <- DimPlot(merged, group.by = "seurat_clusters", label = TRUE, repel = TRUE) + ggtitle("Merged: clusters")
+p_base <- (p_base1 | p_base2) + plot_annotation(title = "Figure 1C. Baseline (no correction)")
+
+fig1 <- (p_qc1 / p_qc2 / p_base)
+fig1
+```
+
+# Run correction methods
+
+## Seurat anchors integration
+
+```{r seurat_integration, eval=params$run_seurat_integration && length(objs) >= 2}
+t0 <- Sys.time()
+seurat_int <- integrate_seurat_anchors(objs, nfeatures = params$nfeatures, npcs = params$npcs)
+rt_seurat <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+```
+
+## Harmony
+
+```{r harmony, eval=params$run_harmony && length(objs) >= 2}
+t0 <- Sys.time()
+harmony_int <- integrate_harmony(merged, group_var = "batch", npcs = params$npcs)
+rt_harmony <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+```
+
+## fastMNN (batchelor)
+
+```{r fastmnn, eval=params$run_fastmnn && length(objs) >= 2}
+t0 <- Sys.time()
+fastmnn_int <- integrate_fastmnn(objs, npcs = params$npcs, k = params$fastmnn_k)
+rt_fastmnn <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+```
+
+# Figure 2 — Visual integration comparison
+
+```{r figure2}
+plots <- list(
+  merged = list(
+    DimPlot(merged, group.by = "batch") + ggtitle("Merged: batch"),
+    DimPlot(merged, group.by = "seurat_clusters", label = TRUE, repel = TRUE) + ggtitle("Merged: clusters")
+  )
+)
+
+if (exists("seurat_int")) {
+  plots$seurat <- list(
+    DimPlot(seurat_int, group.by = "batch") + ggtitle("Seurat: batch"),
+    DimPlot(seurat_int, group.by = "seurat_clusters", label = TRUE, repel = TRUE) + ggtitle("Seurat: clusters")
+  )
+}
+
+if (exists("harmony_int")) {
+  plots$harmony <- list(
+    DimPlot(harmony_int, group.by = "batch") + ggtitle("Harmony: batch"),
+    DimPlot(harmony_int, group.by = "seurat_clusters", label = TRUE, repel = TRUE) + ggtitle("Harmony: clusters")
+  )
+}
+
+if (exists("fastmnn_int")) {
+  plots$fastmnn <- list(
+    DimPlot(fastmnn_int, group.by = "batch") + ggtitle("fastMNN: batch"),
+    DimPlot(fastmnn_int, group.by = "seurat_clusters", label = TRUE, repel = TRUE) + ggtitle("fastMNN: clusters")
+  )
+}
+
+# Arrange: 2 columns (batch / clusters), rows = methods available
+rows <- lapply(names(plots), function(nm) (plots[[nm]][[1]] | plots[[nm]][[2]]))
+fig2 <- wrap_plots(rows, ncol = 1) + plot_annotation(title = "Figure 2. Integration visual comparison (UMAP)")
+fig2
+```
+
+# Benchmarking metrics (subsampled)
+
+```{r metrics}
+set.seed(params$seed_metrics)
+
+candidates <- list(
+  merged = merged,
+  seurat = if (exists("seurat_int")) seurat_int else NULL,
+  harmony = if (exists("harmony_int")) harmony_int else NULL,
+  fastmnn = if (exists("fastmnn_int")) fastmnn_int else NULL
+)
+
+metrics <- compute_all_metrics(
+  candidates = candidates,
+  max_cells = params$max_cells_metrics
+)
+
+metrics$summary
+```
+
+## Benchmarking table (industry-style)
+
+```{r benchmark_table}
+runtimes <- data.frame(
+  method = c("merged", "seurat", "harmony", "fastmnn"),
+  runtime_sec = c(
+    rt_merged,
+    if (exists("rt_seurat")) rt_seurat else NA_real_,
+    if (exists("rt_harmony")) rt_harmony else NA_real_,
+    if (exists("rt_fastmnn")) rt_fastmnn else NA_real_
+  )
+)
+
+benchmark <- make_benchmark_table(metrics$summary, runtimes = runtimes)
+knitr::kable(benchmark, digits = 4)
+```
+
+# Figure 3 — Quantitative benchmarking & decision
+
+```{r figure3}
+p1 <- plot_metric_bars(metrics$summary, "batch_sil_mean", "Batch mixing (silhouette; lower is better)")
+p2 <- plot_metric_bars(metrics$summary, "batch_r2_mean", "Batch effect strength (R²; lower is better)")
+p3 <- plot_metric_bars(metrics$summary, "cluster_sil_mean", "Biology conservation (silhouette; higher is better)")
+p4 <- plot_metric_bars(metrics$summary, "cluster_r2_mean", "Biology signal strength (R²; higher is better)")
+
+fig3 <- ((p1 | p2) / (p3 | p4)) + plot_annotation(title = "Figure 3. Benchmarking metrics (subsampled)")
+fig3
+```
+
+# Decision and interpretation
+
+```{r decision}
+decision <- decide_best_method(metrics)
+knitr::kable(decision, digits = 4)
+
+rec <- decision %>% filter(recommended == "✅ RECOMMENDED")
+if (nrow(rec) == 1) {
+  cat("\n\n**Recommended method:** ", rec$method, "\n\n")
+  if (!is.null(rec$overcorrection_flag) && rec$overcorrection_flag != "") {
+    cat("**Caution:** ", rec$overcorrection_flag, "\n\n")
+  }
+}
+```
+
+# Save outputs
+
+```{r save_outputs, eval=params$save_png}
+out_prefix_abs <- if (startsWith(params$out_prefix, "/")) {
+  params$out_prefix
+} else {
+  file.path(.rmd_dir, params$out_prefix)
+}
+
+dir.create(dirname(out_prefix_abs), showWarnings = FALSE, recursive = TRUE)
+
+# Save figures 1–3 as PNG (much smaller than .rds; suitable for sharing / GitHub)
+.save_png <- function(plot, suffix) {
+  path <- paste0(out_prefix_abs, suffix, ".png")
+  ggplot2::ggsave(
+    filename = path,
+    plot     = plot,
+    width    = params$png_width,
+    height   = params$png_height,
+    dpi      = params$png_dpi,
+    units    = "in"
+  )
+  message("Saved: ", path)
+}
+
+.save_png(fig1, "_figure1_qc_baseline")
+.save_png(fig2, "_figure2_umap_comparison")
+.save_png(fig3, "_figure3_benchmarking")
+
+# Metric tables are tiny — always write these
+write.csv(metrics$summary, paste0(out_prefix_abs, "_metrics.csv"),  row.names = FALSE)
+write.csv(decision,        paste0(out_prefix_abs, "_decision.csv"), row.names = FALSE)
+
+list.files(dirname(out_prefix_abs), full.names = TRUE)
+```
+
+# Reproducibility
+
+```{r sessioninfo}
+sessionInfo()
+```
