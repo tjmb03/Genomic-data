@@ -49,10 +49,9 @@ scRNA-integration/
 │   ├── batchA/              # .h5, MTX directory, or archive
 │   └── batchB/
 └── outputs/                 # Generated on render
-    ├── integration_merged.rds
-    ├── integration_seurat_integrated.rds
-    ├── integration_harmony.rds
-    ├── integration_fastmnn.rds
+    ├── integration_figure1_qc_baseline.png
+    ├── integration_figure2_umap_comparison.png
+    ├── integration_figure3_benchmarking.png
     ├── integration_metrics.csv
     └── integration_decision.csv
 ```
@@ -112,7 +111,10 @@ The report is **location-independent** — paths are resolved relative to the Rm
 | `run_harmony` | `true` | Toggle Harmony method |
 | `run_fastmnn` | `true` | Toggle fastMNN method |
 | `fastmnn_k` | `20` | k-nearest neighbours for fastMNN |
-| `save_rds` | `true` | Save `.rds` objects to `outputs/` |
+| `save_png` | `true` | Save figures 1–3 as PNG files to `outputs/` |
+| `png_width` | `14` | PNG width in inches |
+| `png_height` | `10` | PNG height in inches |
+| `png_dpi` | `150` | PNG resolution (use 300 for print) |
 | `out_prefix` | `outputs/integration` | Prefix for all output files |
 
 ---
@@ -166,4 +168,5 @@ Scores are min-max normalised across methods and averaged with equal weight (25%
 | patchwork | CRAN | Figure layout |
 | cluster | CRAN | Silhouette computation |
 | ggplot2, dplyr | CRAN | Plotting and data wrangling |
+
 
