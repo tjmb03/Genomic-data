@@ -6,6 +6,9 @@ Foundational genomic data analysis workflows in R, focused on RNA-seq differenti
 
 ## Contents
 
+### 📄 scRNA-seq Batch Integration Workflow
+A reproducible, publication-ready R pipeline for benchmarking and selecting the best batch correction method for 10x scRNA-seq data. The workflow runs three integration methods head-to-head, scores them on quantitative metrics, and auto-recommends the winner — all inside a single rendered HTML report.
+
 ### 📄 DESeq2 examples.R  
 RNA-seq differential expression workflow using **DESeq2** (design setup, normalization, DE testing, results extraction).
 
