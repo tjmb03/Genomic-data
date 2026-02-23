@@ -3,7 +3,7 @@
 
 A reproducible, publication-ready R pipeline for benchmarking and selecting the best batch correction method for 10x scRNA-seq data. The workflow runs three integration methods head-to-head, scores them on quantitative metrics, and auto-recommends the winner — all inside a single rendered HTML report.
 
-🔗 Live App:
+🔗 Page Overview:
  https://tjmb03.github.io/Genomic-data/
 
 ---
